@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+*.user
+
+# Local database, uploaded documents and the SQLite fallback
+src/UttorAI.Api/App_Data/
+
+# Local configuration overrides. Secrets belong in user secrets:
+#   dotnet user-secrets set "Llm:ApiKey" "..."
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+.env
