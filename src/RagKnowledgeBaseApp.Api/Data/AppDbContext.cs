@@ -17,6 +17,7 @@ public class AppDbContext : DbContext
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<DailyTokenUsage> DailyTokenUsage => Set<DailyTokenUsage>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -80,5 +81,13 @@ public class AppDbContext : DbContext
         });
 
         b.Entity<AuditLog>().HasIndex(x => new { x.TenantId, x.Timestamp });
+
+        b.Entity<DailyTokenUsage>(e =>
+        {
+            // One row per user per day is the whole contract; the unique index is what lets the
+            // increment be a single upsert instead of a read-modify-write race.
+            e.HasIndex(x => new { x.UserId, x.UsageDate }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.UsageDate });
+        });
     }
 }

@@ -9,6 +9,7 @@ using RagKnowledgeBaseApp.Api.Domain;
 using RagKnowledgeBaseApp.Api.Dtos;
 using RagKnowledgeBaseApp.Api.Services;
 using RagKnowledgeBaseApp.Api.Services.Vector;
+using RagKnowledgeBaseApp.Api.Services.Quota;
 using RagKnowledgeBaseApp.Api.Services.Ingestion;
 using RagKnowledgeBaseApp.Api.Services.Storage;
 
@@ -26,10 +27,12 @@ public class ChatController : ControllerBase
     private readonly IDocumentStorage _storage;
     private readonly IngestionQueue _queue;
     private readonly IVectorStore _vectors;
+    private readonly ITokenQuota _quota;
 
     public ChatController(AppDbContext db, CurrentUser current, RagService rag, AuditService audit,
-        IDocumentStorage storage, IngestionQueue queue, IVectorStore vectors)
+        IDocumentStorage storage, IngestionQueue queue, IVectorStore vectors, ITokenQuota quota)
     {
+        _quota = quota;
         _db = db;
         _current = current;
         _rag = rag;
@@ -211,6 +214,11 @@ public class ChatController : ControllerBase
             NoAnswer = answer.NoAnswer
         };
         _db.Messages.Add(assistantMessage);
+
+        // Chat draws on the same daily allowance as embedding, so a conversation-heavy day
+        // correctly reduces how much a user can still index.
+        await _quota.RecordAsync(_current.TenantId, _current.Id,
+            prompt: answer.PromptTokens, completion: answer.CompletionTokens, ct: ct);
 
         conversation.UpdatedAt = DateTime.UtcNow;
         if (conversation.Title == "New conversation")

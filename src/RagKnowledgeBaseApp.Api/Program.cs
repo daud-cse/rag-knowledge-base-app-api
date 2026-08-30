@@ -10,6 +10,7 @@ using RagKnowledgeBaseApp.Api.Domain;
 using RagKnowledgeBaseApp.Api.Services;
 using RagKnowledgeBaseApp.Api.Services.Ingestion;
 using RagKnowledgeBaseApp.Api.Services.Llm;
+using RagKnowledgeBaseApp.Api.Services.Quota;
 using RagKnowledgeBaseApp.Api.Services.Storage;
 using RagKnowledgeBaseApp.Api.Services.Vector;
 
@@ -22,6 +23,7 @@ var vectorOptions = builder.Configuration.GetSection("VectorStore").Get<VectorSt
                     ?? new VectorStoreOptions();
 var externalAuth = builder.Configuration.GetSection("Authentication").Get<ExternalAuthOptions>()
                    ?? new ExternalAuthOptions();
+var quotaOptions = builder.Configuration.GetSection("Quota").Get<QuotaOptions>() ?? new QuotaOptions();
 
 // Aliases for the flatter section names used elsewhere in this codebase, so either shape works.
 // A Google client id is public by design (the browser sends it to Google), so unlike the LLM key
@@ -46,6 +48,8 @@ builder.Services.AddSingleton(jwtOptions);
 builder.Services.AddSingleton(llmOptions);
 builder.Services.AddSingleton(vectorOptions);
 builder.Services.AddSingleton(externalAuth);
+builder.Services.AddSingleton(quotaOptions);
+builder.Services.AddScoped<ITokenQuota, TokenQuota>();
 builder.Services.AddSingleton<IExternalTokenValidator, ExternalTokenValidator>();
 
 // ---------------- database ----------------

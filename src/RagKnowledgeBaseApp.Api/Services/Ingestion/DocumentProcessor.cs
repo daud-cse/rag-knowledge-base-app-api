@@ -6,6 +6,7 @@ using RagKnowledgeBaseApp.Api.Domain;
 using RagKnowledgeBaseApp.Api.Services.Llm;
 using RagKnowledgeBaseApp.Api.Services.Storage;
 using RagKnowledgeBaseApp.Api.Services.Vector;
+using RagKnowledgeBaseApp.Api.Services.Quota;
 
 namespace RagKnowledgeBaseApp.Api.Services.Ingestion;
 
@@ -65,12 +66,14 @@ public class DocumentProcessor
     private readonly Chunker _chunker;
     private readonly IEmbeddingProvider _embeddings;
     private readonly IVectorStore _vectors;
+    private readonly ITokenQuota _quota;
     private readonly ILogger<DocumentProcessor> _logger;
 
     public DocumentProcessor(AppDbContext db, IDocumentStorage storage, TextExtractionService extraction,
         Chunker chunker, IEmbeddingProvider embeddings, IVectorStore vectors,
-        ILogger<DocumentProcessor> logger)
+        ITokenQuota quota, ILogger<DocumentProcessor> logger)
     {
+        _quota = quota;
         _db = db;
         _storage = storage;
         _extraction = extraction;
@@ -116,6 +119,7 @@ public class DocumentProcessor
 
             const int batchSize = 32;
             var ordinal = 0;
+            var embeddedTokens = 0L;
             for (var i = 0; i < chunks.Count; i += batchSize)
             {
                 var batch = chunks.Skip(i).Take(batchSize).ToList();
@@ -140,11 +144,18 @@ public class DocumentProcessor
                     });
                 }
 
+                embeddedTokens += entities.Sum(e => (long)e.TokenEstimate);
+
                 // The chunk rows are the system of record; the vector store is the index over them.
                 _db.DocumentChunks.AddRange(entities);
                 await _db.SaveChangesAsync(ct);
                 await _vectors.UpsertAsync(entities, ct);
             }
+
+            // Charge the embedding cost to whoever uploaded the document. This runs after the work
+            // rather than before it, so a document is never billed for tokens it did not spend --
+            // the pre-upload check in DocumentsController is what stops a run-away job starting.
+            await _quota.RecordAsync(doc.TenantId, doc.UploadedByUserId, embedding: embeddedTokens, ct: ct);
 
             doc.ChunkCount = ordinal;
             doc.IndexedAt = DateTime.UtcNow;

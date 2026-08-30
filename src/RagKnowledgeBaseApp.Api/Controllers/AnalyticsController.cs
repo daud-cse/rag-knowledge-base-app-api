@@ -8,6 +8,7 @@ using RagKnowledgeBaseApp.Api.Dtos;
 using RagKnowledgeBaseApp.Api.Services.Llm;
 using RagKnowledgeBaseApp.Api.Services.Storage;
 using RagKnowledgeBaseApp.Api.Services.Vector;
+using RagKnowledgeBaseApp.Api.Services.Quota;
 
 namespace RagKnowledgeBaseApp.Api.Controllers;
 
@@ -121,17 +122,39 @@ public class SystemController : ControllerBase
     private readonly IDocumentStorage _storage;
     private readonly StorageHealth _storageHealth;
     private readonly IConfiguration _config;
+    private readonly ITokenQuota _quota;
+    private readonly CurrentUser _current;
 
     public SystemController(IChatCompletionProvider chat, IEmbeddingProvider embeddings,
         IVectorStore vectors, IDocumentStorage storage, StorageHealth storageHealth,
-        IConfiguration config)
+        IConfiguration config, ITokenQuota quota, CurrentUser current)
     {
+        _quota = quota;
+        _current = current;
         _chat = chat;
         _embeddings = embeddings;
         _vectors = vectors;
         _storage = storage;
         _storageHealth = storageHealth;
         _config = config;
+    }
+
+    /// <summary>What the signed-in user has spent today and what is left. The UI reads this to warn
+    /// before an upload is refused rather than after.</summary>
+    [HttpGet("quota")]
+    [Authorize]
+    public async Task<ActionResult<object>> Quota(CancellationToken ct)
+    {
+        var q = await _quota.GetAsync(_current.Id, _current.Role.ToString(), ct);
+        return Ok(new
+        {
+            enabled = q.Enabled,
+            used = q.Used,
+            limit = q.Limit,
+            remaining = q.Enabled ? q.Remaining : (long?)null,
+            exceeded = q.Exceeded,
+            resetsAtUtc = DateTime.UtcNow.Date.AddDays(1)
+        });
     }
 
     [HttpGet("status")]

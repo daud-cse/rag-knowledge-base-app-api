@@ -212,6 +212,28 @@ public class Message
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
+/// <summary>One row per user per UTC day, holding everything that consumes model quota.
+/// Embedding and chat are tracked separately because they bill at very different rates, but the
+/// daily limit is enforced against their sum: a user who has spent the day chatting should not
+/// then be able to index a large document for free.</summary>
+public class DailyTokenUsage
+{
+    public long Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid UserId { get; set; }
+    /// <summary>UTC calendar day. Deliberately not local time, so the reset point is the same for
+    /// every tenant regardless of where its users are.</summary>
+    public DateOnly UsageDate { get; set; }
+
+    public long EmbeddingTokens { get; set; }
+    public long PromptTokens { get; set; }
+    public long CompletionTokens { get; set; }
+
+    public long TotalTokens => EmbeddingTokens + PromptTokens + CompletionTokens;
+
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
 public class AuditLog
 {
     public long Id { get; set; }

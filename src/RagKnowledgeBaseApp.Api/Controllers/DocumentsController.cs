@@ -9,6 +9,7 @@ using RagKnowledgeBaseApp.Api.Services;
 using RagKnowledgeBaseApp.Api.Services.Vector;
 using RagKnowledgeBaseApp.Api.Services.Ingestion;
 using RagKnowledgeBaseApp.Api.Services.Storage;
+using RagKnowledgeBaseApp.Api.Services.Quota;
 
 namespace RagKnowledgeBaseApp.Api.Controllers;
 
@@ -25,10 +26,12 @@ public class DocumentsController : ControllerBase
     private readonly IngestionQueue _queue;
     private readonly AuditService _audit;
     private readonly IVectorStore _vectors;
+    private readonly ITokenQuota _quota;
 
     public DocumentsController(AppDbContext db, CurrentUser current, IDocumentStorage storage,
-        IngestionQueue queue, AuditService audit, IVectorStore vectors)
+        IngestionQueue queue, AuditService audit, IVectorStore vectors, ITokenQuota quota)
     {
+        _quota = quota;
         _db = db;
         _current = current;
         _storage = storage;
@@ -81,6 +84,36 @@ public class DocumentsController : ControllerBase
         var level = Enum.TryParse<Classification>(classification, true, out var c) ? c : Classification.Internal;
         if ((int)level > (int)_current.MaxClassification)
             return BadRequest(new { message = "You cannot classify a document above your own clearance." });
+
+        // Indexing a document costs embedding tokens, so the daily allowance is checked before any
+        // bytes are stored. The estimate is deliberately coarse -- roughly four characters per
+        // token over the raw upload -- because the exact count is only known after extraction, and
+        // refusing a clearly oversized upload up front beats storing a file we will not index.
+        var quota = await _quota.GetAsync(_current.Id, _current.Role.ToString(), ct);
+        if (quota.Enabled)
+        {
+            if (quota.Exceeded)
+                return StatusCode(StatusCodes.Status429TooManyRequests, new
+                {
+                    message = "Your token limit is exceeded for today. Uploads will work again "
+                            + "after the daily reset at 00:00 UTC.",
+                    used = quota.Used,
+                    limit = quota.Limit,
+                    remaining = 0L
+                });
+
+            var estimated = files.Sum(f => f.Length) / 4;
+            if (estimated > quota.Remaining)
+                return StatusCode(StatusCodes.Status429TooManyRequests, new
+                {
+                    message = $"This upload needs about {estimated:N0} tokens to index but only "
+                            + $"{quota.Remaining:N0} of your {quota.Limit:N0} daily tokens remain. "
+                            + "Try a smaller file, or upload again after the reset at 00:00 UTC.",
+                    used = quota.Used,
+                    limit = quota.Limit,
+                    remaining = quota.Remaining
+                });
+        }
 
         var created = new List<Document>();
         foreach (var file in files)
