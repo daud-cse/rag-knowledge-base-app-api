@@ -1,8 +1,8 @@
-# Uttor AI — Enterprise RAG API
+# RAG Knowledge Base — Enterprise RAG API
 
 The **ASP.NET Core 8** back end of a multi-tenant, retrieval-augmented generation platform.
 
-The Angular front end lives in its own repository: **[uttor-ai-ui](https://github.com/daud-cse/uttor-ai-ui)**.
+The Angular front end lives in its own repository: **[rag-knowledge-base-app-ui](https://github.com/daud-cse/rag-knowledge-base-app-ui)**.
 Run both together — the UI proxies `/api` to this service on `http://localhost:5210`.
 
 Storage, vector search, the database and the LLM all sit behind interfaces, so each one can be
@@ -12,9 +12,9 @@ pointed at a local or a cloud implementation through configuration alone.
 
 | Component | In use | Alternative |
 |---|---|---|
-| Database | **SQL Server Express** — local instance, database `UttorAI` | SQLite (`Database:Provider=Sqlite`) |
-| Vector index | **Qdrant** — `http://localhost:6333`, collection `uttorai_chunks_1536` | SQL-backed (`VectorStore:Provider=Sql`) |
-| Document storage | **Azure Blob** — account `uttorai`, one container per tenant | Local filesystem (`Storage:Provider=Local`) |
+| Database | **SQL Server Express** — local instance, database `RagKnowledgeBaseApp` | SQLite (`Database:Provider=Sqlite`) |
+| Vector index | **Qdrant** — `http://localhost:6333`, collection `ragkb_chunks_1536` | SQL-backed (`VectorStore:Provider=Sql`) |
+| Document storage | **Azure Blob** — account `ragknowledgebaseapp`, one container per tenant | Local filesystem (`Storage:Provider=Local`) |
 | LLM | **OpenAI** — `gpt-4o-mini` | Azure OpenAI, or the built-in local engine |
 | Embeddings | **OpenAI** — `text-embedding-3-small`, 1536 dims | Azure OpenAI, or local hashed n-gram |
 | Identity | Local password + **Google SSO** | Microsoft Entra ID (config only), SAML |
@@ -24,7 +24,7 @@ Secrets (the OpenAI key, the storage connection string) live in **.NET user secr
 storage account name) stay in `appsettings.json` where they are easy to see:
 
 ```bash
-cd src/UttorAI.Api
+cd src/RagKnowledgeBaseApp.Api
 dotnet user-secrets list
 dotnet user-secrets set "Llm:ApiKey" "sk-..."
 ```
@@ -42,25 +42,25 @@ Prerequisites: .NET 8 SDK, Node 20, the SQL Express instance running, and Qdrant
 Two terminals, from this folder:
 
 ```bash
-cd src/UttorAI.Api
+cd src/RagKnowledgeBaseApp.Api
 dotnet run --urls http://localhost:5210
 ```
 
 Swagger is at <http://localhost:5210/swagger>. Then start the UI from the
-[uttor-ai-ui](https://github.com/daud-cse/uttor-ai-ui) repository and open
+[rag-knowledge-base-app-ui](https://github.com/daud-cse/rag-knowledge-base-app-ui) repository and open
 <http://localhost:4300>.
 
-On first run the API creates the `UttorAI` database and the Qdrant collection, seeds two companies,
+On first run the API creates the `RagKnowledgeBaseApp` database and the Qdrant collection, seeds two companies,
 five accounts and a knowledge base with four sample documents, and indexes them.
 
-To start over: drop the `UttorAI` database and delete the `uttorai_chunks_1536` collection; both are
+To start over: drop the `RagKnowledgeBaseApp` database and delete the `ragkb_chunks_1536` collection; both are
 recreated and reseeded on the next start.
 
 ### Demo accounts — password `Passw0rd!`
 
 | Account | Role | Clearance | Can do |
 |---|---|---|---|
-| `super@uttor.ai` | Super Admin | Restricted | Everything, plus create/suspend companies |
+| `super@ragkb.app` | Super Admin | Restricted | Everything, plus create/suspend companies |
 | `admin@contoso.com` | Company Admin | Restricted | Users, roles, audit log, all of the below |
 | `knowledge@contoso.com` | Knowledge Admin | Confidential | Company knowledge bases and documents |
 | `user@contoso.com` | User | Internal | Chat, personal knowledge base, own conversations |
@@ -93,7 +93,7 @@ it cannot find it. Sign in as `admin@contoso.com` and the same question is answe
 | 14 | Analytics — questions/day, success and no-answer rate, latency, tokens, cost, feedback, top chatbots and knowledge bases | `AnalyticsController`, Admin → Dashboard |
 | 15 | Audit logging — auth, uploads, downloads, deletes, config changes, and every question with the sources retrieved | `AuditService`, Admin → Audit log |
 | 16 | Data governance — classification, versioning with automatic archival, ephemeral uploads with expiry, and deletion that purges database, blob storage and vector index together | `Document`, `DocumentsController`, `TenantsController.Delete` |
-| 17 | Admin portal | served by the [UI repository](https://github.com/daud-cse/uttor-ai-ui) |
+| 17 | Admin portal | served by the [UI repository](https://github.com/daud-cse/rag-knowledge-base-app-ui) |
 
 ---
 
@@ -147,7 +147,7 @@ from the request body.
 ### Layout
 
 ```
-src/UttorAI.Api/
+src/RagKnowledgeBaseApp.Api/
   Domain/       entities and enums
   Data/         DbContext, seeder, sample documents
   Auth/         JWT issuing, claims, CurrentUser, RBAC policies
@@ -160,7 +160,7 @@ src/UttorAI.Api/
   Controllers/  auth, tenants, users, knowledge bases, documents, chatbots, chat, analytics, system
 ```
 
-The front end is in [uttor-ai-ui](https://github.com/daud-cse/uttor-ai-ui).
+The front end is in [rag-knowledge-base-app-ui](https://github.com/daud-cse/rag-knowledge-base-app-ui).
 
 ---
 
@@ -205,7 +205,7 @@ Environment variable form, e.g. `Llm__ApiKey=sk-...`, `Llm__Provider=OpenAI`.
 Notes:
 
 - Switching to OpenAI embeddings moves you from 384 to 1536 dimensions, so retrieval starts using a
-  new Qdrant collection (`uttorai_chunks_1536`) that is empty. **Re-index every document**
+  new Qdrant collection (`ragkb_chunks_1536`) that is empty. **Re-index every document**
   (Admin → Knowledge base → document → *Re-index*) after switching, or nothing will be findable.
   The old collection is left alone so you can switch back.
 - `Jwt:SigningKey` falls back to a per-machine development key. Set it explicitly anywhere real.
@@ -220,7 +220,7 @@ Notes:
 Every workspace is a `Tenant` row; what differs is its `TenantType`.
 
 ```
-                        Uttor AI
+                        RAG Knowledge Base
                             │
               ┌─────────────┴─────────────┐
         Company workspace          Personal workspace
@@ -334,17 +334,17 @@ provider never invalidates a stored row.
 the storage account reads clearly in the portal:
 
 ```
-uttorai-documents-contoso/                ← Contoso Health
+ragkb-documents-contoso/                ← Contoso Health
   0ad876a8-…/…_Claims_Guideline.md
   0ad876a8-…/…_Provider_Manual.md
-uttorai-documents-northwind/              ← Northwind Insurance
+ragkb-documents-northwind/              ← Northwind Insurance
   …
 ```
 
 `Single` puts every company in one container, one folder per tenant id:
 
 ```
-uttorai-documents/
+ragkb-documents/
   a5908720-…-28dc8331b4bb/0ad876a8-…/…_Claims_Guideline.md
   7f2c1a90-…-11ab34cd56ef/…
 ```
@@ -369,9 +369,9 @@ The account name is not a secret, so it sits in `appsettings.json`. The credenti
 "Storage": {
   "Provider": "AzureBlob",
   "Azure": {
-    "AccountName": "uttorai",
+    "AccountName": "ragknowledgebaseapp",
     "ContainerStrategy": "PerTenant", // or "Single"
-    "Container": "uttorai-documents"
+    "Container": "ragkb-documents"
   }
 }
 ```
@@ -380,7 +380,7 @@ Then supply a credential, either:
 
 ```bash
 # Option A — connection string (works anywhere)
-dotnet user-secrets set "Storage:Azure:ConnectionString" "DefaultEndpointsProtocol=https;AccountName=uttorai;AccountKey=...;EndpointSuffix=core.windows.net"
+dotnet user-secrets set "Storage:Azure:ConnectionString" "DefaultEndpointsProtocol=https;AccountName=ragknowledgebaseapp;AccountKey=...;EndpointSuffix=core.windows.net"
 
 # Option B — passwordless, preferred in Azure. No secret at all: grant the signed-in user or the
 # app's managed identity the "Storage Blob Data Contributor" role on the account, then leave
