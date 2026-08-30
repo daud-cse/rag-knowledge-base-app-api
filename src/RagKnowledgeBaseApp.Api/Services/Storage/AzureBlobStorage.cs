@@ -83,7 +83,17 @@ public class AzureBlobStorage : IDocumentStorage
         if (PerTenant)
         {
             // Containers are created per tenant on first write; just prove the account answers.
-            await _service.GetPropertiesAsync(ct);
+            //
+            // Listing containers rather than reading service properties is deliberate:
+            // GetPropertiesAsync needs Microsoft.Storage/storageAccounts/blobServices/read, which
+            // Storage Blob Data Contributor does not grant, so under a managed identity it fails
+            // with AuthorizationPermissionMismatch even though every real operation would succeed.
+            // A one-item container listing is covered by the same role the uploads need, which
+            // keeps the identity on exactly one least-privilege role.
+            await foreach (var _ in _service.GetBlobContainersAsync(cancellationToken: ct)
+                                            .AsPages(pageSizeHint: 1))
+                break;
+
             _logger.LogInformation("Azure Blob ready on account {Account} (container per tenant)",
                 _service.AccountName);
             return;
