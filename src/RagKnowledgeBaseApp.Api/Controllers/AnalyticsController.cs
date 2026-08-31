@@ -93,21 +93,43 @@ public class AnalyticsController : ControllerBase
     [HttpGet("audit")]
     [Authorize(Policy = Policies.CompanyAdmin)]
     public async Task<ActionResult<PagedResult<AuditLogDto>>> Audit([FromQuery] int page,
-        [FromQuery] int pageSize, [FromQuery] string? action, CancellationToken ct)
+        [FromQuery] int pageSize, [FromQuery] string? action, [FromQuery] Guid? tenantId,
+        [FromQuery] string? email, CancellationToken ct)
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize == 0 ? 50 : pageSize, 10, 200);
 
-        var query = _db.AuditLogs.AsNoTracking().Where(a => a.TenantId == _current.TenantId);
+        // A company admin is confined to their own tenant. A super admin runs the platform, so
+        // they see every tenant by default and can narrow to one -- otherwise "who signed in"
+        // could only ever be answered one company at a time.
+        var platformWide = _current.Role == UserRole.SuperAdmin;
+
+        var query = _db.AuditLogs.AsNoTracking();
+        if (!platformWide) query = query.Where(a => a.TenantId == _current.TenantId);
+        else if (tenantId is { } wanted) query = query.Where(a => a.TenantId == wanted);
+
         if (!string.IsNullOrWhiteSpace(action))
             query = query.Where(a => EF.Functions.Like(a.Action, $"%{action.Trim()}%"));
+        if (!string.IsNullOrWhiteSpace(email))
+            query = query.Where(a => a.UserEmail != null
+                                     && EF.Functions.Like(a.UserEmail, $"%{email.Trim()}%"));
 
         var total = await query.CountAsync(ct);
         var items = await query.OrderByDescending(a => a.Timestamp)
             .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
 
+        // Only the tenants on this page are looked up, so the cost does not grow with the log.
+        var names = new Dictionary<Guid, string>();
+        if (platformWide && items.Count > 0)
+        {
+            var ids = items.Select(a => a.TenantId).Distinct().ToList();
+            names = await _db.Tenants.AsNoTracking().Where(t => ids.Contains(t.Id))
+                .ToDictionaryAsync(t => t.Id, t => t.Name, ct);
+        }
+
         return Ok(new PagedResult<AuditLogDto>(items.Select(a => new AuditLogDto(a.Id, a.UserEmail,
-            a.Action, a.EntityType, a.EntityId, a.Details, a.IpAddress, a.Timestamp)).ToArray(),
+            a.Action, a.EntityType, a.EntityId, a.Details, a.IpAddress, a.Timestamp,
+            platformWide ? names.GetValueOrDefault(a.TenantId) : null)).ToArray(),
             total, page, pageSize));
     }
 }

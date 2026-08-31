@@ -47,10 +47,22 @@ public class AuthController : ControllerBase
         // Same response for unknown user and wrong password, so the endpoint cannot enumerate accounts.
         if (user is null || !user.IsActive || string.IsNullOrEmpty(user.PasswordHash) ||
             !BCrypt.Net.BCrypt.Verify(request.Password ?? "", user.PasswordHash))
+        {
+            // Recorded so repeated attempts against an account are visible in the audit log. The
+            // reason is kept internal and the response is unchanged, so this stays unusable for
+            // account enumeration. An unknown address has no tenant, and lands at platform scope.
+            await WriteFailedLoginAsync(user?.TenantId, email,
+                user is null ? "unknown-account" : !user.IsActive ? "account-disabled"
+                    : string.IsNullOrEmpty(user.PasswordHash) ? "no-password-set" : "bad-password",
+                ct);
             return Unauthorized(new { message = "Invalid email or password." });
+        }
 
         if (user.Tenant is null || !user.Tenant.IsActive)
+        {
+            await WriteFailedLoginAsync(user.TenantId, email, "tenant-disabled", ct);
             return Unauthorized(new { message = "This company account is disabled." });
+        }
 
         user.LastLoginAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -263,6 +275,30 @@ public class AuthController : ControllerBase
 
         var (token, expires) = _tokens.Issue(user, tenant);
         return Ok(new LoginResponse(token, expires, Describe(user, tenant)));
+    }
+
+    /// <summary>Records a rejected sign-in. Deliberately not routed through AuditService, which
+    /// reads the caller's identity from the JWT -- there is no JWT yet at this point.</summary>
+    private async Task WriteFailedLoginAsync(Guid? tenantId, string email, string reason,
+        CancellationToken ct)
+    {
+        try
+        {
+            _db.AuditLogs.Add(new Domain.AuditLog
+            {
+                TenantId = tenantId ?? Guid.Empty,
+                UserId = null,
+                UserEmail = email,
+                Action = "auth.login.failed",
+                Details = JsonSerializer.Serialize(new { Reason = reason }),
+                IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString()
+            });
+            await _db.SaveChangesAsync(ct);
+        }
+        catch
+        {
+            // A failed sign-in must never turn an Unauthorized into a 500.
+        }
     }
 
     private async Task WriteAuditAsync(Guid tenantId, User user, string action, object? details,

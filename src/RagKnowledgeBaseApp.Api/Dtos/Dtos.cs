@@ -79,7 +79,8 @@ public record AnalyticsSummaryDto(int Users, int Chatbots, int KnowledgeBases, i
 public record SeriesPointDto(string Label, int Value);
 public record NameCountDto(string Name, int Count);
 public record AuditLogDto(long Id, string? UserEmail, string Action, string? EntityType,
-    string? EntityId, string? Details, string? IpAddress, DateTime Timestamp);
+    string? EntityId, string? Details, string? IpAddress, DateTime Timestamp,
+    string? TenantName = null);
 
 // ---------- misc ----------
 public record ProviderStatusDto(string Llm, string Embeddings, string VectorStore, string Storage,
