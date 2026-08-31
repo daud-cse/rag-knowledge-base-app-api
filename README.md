@@ -60,7 +60,6 @@ recreated and reseeded on the next start.
 
 | Account | Role | Clearance | Can do |
 |---|---|---|---|
-| `super@ragkb.app` | Super Admin | Restricted | Everything, plus create/suspend companies |
 | `admin@contoso.com` | Company Admin | Restricted | Users, roles, audit log, all of the below |
 | `knowledge@contoso.com` | Knowledge Admin | Confidential | Company knowledge bases and documents |
 | `user@contoso.com` | User | Internal | Chat, personal knowledge base, own conversations |
