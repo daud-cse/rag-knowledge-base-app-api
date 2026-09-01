@@ -146,13 +146,15 @@ public class SystemController : ControllerBase
     private readonly IConfiguration _config;
     private readonly ITokenQuota _quota;
     private readonly CurrentUser _current;
+    private readonly AppDbContext _db;
 
     public SystemController(IChatCompletionProvider chat, IEmbeddingProvider embeddings,
         IVectorStore vectors, IDocumentStorage storage, StorageHealth storageHealth,
-        IConfiguration config, ITokenQuota quota, CurrentUser current)
+        IConfiguration config, ITokenQuota quota, CurrentUser current, AppDbContext db)
     {
         _quota = quota;
         _current = current;
+        _db = db;
         _chat = chat;
         _embeddings = embeddings;
         _vectors = vectors;
@@ -177,6 +179,32 @@ public class SystemController : ControllerBase
             exceeded = q.Exceeded,
             resetsAtUtc = DateTime.UtcNow.Date.AddDays(1)
         });
+    }
+
+    /// <summary>Is the API able to serve a sign-in yet?
+    ///
+    /// This deliberately opens a database connection rather than just returning 200. The container
+    /// scales to zero and Azure SQL auto-pauses independently, so the process can be answering
+    /// requests a long time before the database has resumed — and a readiness check that only
+    /// proved the container was up would hand the wait straight back to the login POST, which is
+    /// the failure it exists to prevent.
+    ///
+    /// Requests to this endpoint are themselves what triggers both wake-ups, so polling it is the
+    /// warm-up, not merely a test of it.</summary>
+    [HttpGet("ready")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Ready(CancellationToken ct)
+    {
+        try
+        {
+            if (await _db.Database.CanConnectAsync(ct))
+                return Ok(new { ready = true });
+        }
+        catch
+        {
+            // Still resuming. 503 keeps the client retrying instead of treating it as fatal.
+        }
+        return StatusCode(StatusCodes.Status503ServiceUnavailable, new { ready = false });
     }
 
     [HttpGet("status")]
