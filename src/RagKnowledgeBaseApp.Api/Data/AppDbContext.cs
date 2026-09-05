@@ -18,6 +18,10 @@ public class AppDbContext : DbContext
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<DailyTokenUsage> DailyTokenUsage => Set<DailyTokenUsage>();
+    public DbSet<Tool> Tools => Set<Tool>();
+    public DbSet<ToolOperation> ToolOperations => Set<ToolOperation>();
+    public DbSet<ChatbotTool> ChatbotTools => Set<ChatbotTool>();
+    public DbSet<ToolInvocation> ToolInvocations => Set<ToolInvocation>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -81,6 +85,36 @@ public class AppDbContext : DbContext
         });
 
         b.Entity<AuditLog>().HasIndex(x => new { x.TenantId, x.Timestamp });
+
+        b.Entity<Tool>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.Type });
+            // Two tools with the same name inside one tenant would give the model two identical
+            // function names to choose between.
+            e.HasIndex(x => new { x.TenantId, x.Name }).IsUnique();
+            e.HasMany(x => x.Operations).WithOne(o => o.Tool!)
+                .HasForeignKey(o => o.ToolId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<ToolOperation>().HasIndex(x => new { x.ToolId, x.Name }).IsUnique();
+
+        b.Entity<ChatbotTool>(e =>
+        {
+            e.HasKey(x => new { x.ChatbotId, x.ToolId });
+            e.HasOne(x => x.Chatbot).WithMany(c => c!.Tools)
+                .HasForeignKey(x => x.ChatbotId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Tool).WithMany()
+                .HasForeignKey(x => x.ToolId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<ToolInvocation>(e =>
+        {
+            e.HasIndex(x => new { x.TenantId, x.CreatedAt });
+            e.HasIndex(x => new { x.ConversationId, x.Status });
+            // A tool with history must not be silently removable underneath its own audit trail.
+            e.HasOne(x => x.Tool).WithMany()
+                .HasForeignKey(x => x.ToolId).OnDelete(DeleteBehavior.Restrict);
+        });
 
         b.Entity<DailyTokenUsage>(e =>
         {

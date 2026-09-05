@@ -11,6 +11,7 @@ using RagKnowledgeBaseApp.Api.Services;
 using RagKnowledgeBaseApp.Api.Services.Ingestion;
 using RagKnowledgeBaseApp.Api.Services.Llm;
 using RagKnowledgeBaseApp.Api.Services.Quota;
+using RagKnowledgeBaseApp.Api.Services.Tools;
 using RagKnowledgeBaseApp.Api.Services.Storage;
 using RagKnowledgeBaseApp.Api.Services.Vector;
 
@@ -50,6 +51,13 @@ builder.Services.AddSingleton(vectorOptions);
 builder.Services.AddSingleton(externalAuth);
 builder.Services.AddSingleton(quotaOptions);
 builder.Services.AddScoped<ITokenQuota, TokenQuota>();
+
+// ---------------- external tools ----------------
+// Typed clients so a slow or hostile tool endpoint cannot hold a request thread indefinitely.
+builder.Services.AddHttpClient<IToolExecutor, ApiToolExecutor>(c => c.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddHttpClient<McpToolExecutor>(c => c.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddScoped<IToolExecutor>(sp => sp.GetRequiredService<McpToolExecutor>());
+builder.Services.AddScoped<ToolService>();
 builder.Services.AddSingleton<IExternalTokenValidator, ExternalTokenValidator>();
 
 // ---------------- database ----------------

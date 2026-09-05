@@ -47,8 +47,10 @@ public record ChatbotDto(Guid Id, string Name, string? Description, string Syste
     int MaxContextTokens, double SimilarityThreshold, bool HybridSearch, bool QueryRewriting, string ResponseLanguage,
     string WelcomeMessage, string[] SuggestedQuestions, bool AllowUserUpload,
     int ConversationTimeoutMinutes, bool KeepChatHistory, bool IsActive, DateTime CreatedAt,
-    KnowledgeBaseLinkDto[] KnowledgeBases);
+    KnowledgeBaseLinkDto[] KnowledgeBases, ToolLinkDto[] Tools);
 public record KnowledgeBaseLinkDto(Guid KnowledgeBaseId, string Name, int Priority);
+public record ToolLinkDto(Guid ToolId, string Name, string Type, int OperationCount);
+public record MapToolsRequest(Guid[] ToolIds);
 public record SaveChatbotRequest(string Name, string? Description, string? SystemPrompt, string? Model,
     double? Temperature, int? MaxTokens, bool? RagEnabled, bool? CitationsEnabled, int? TopK,
     int? RerankTopN, int? MaxContextTokens, double? SimilarityThreshold, bool? HybridSearch, bool? QueryRewriting,
@@ -66,7 +68,12 @@ public record MessageDto(Guid Id, string Role, string Content, CitationDto[] Cit
     DateTime CreatedAt);
 public record StartConversationRequest(Guid ChatbotId, string? Title);
 public record SendMessageRequest(string Message, Guid[]? AttachmentDocumentIds);
-public record ChatResponse(Guid ConversationId, MessageDto Message, string[] FollowUpQuestions);
+public record ChatResponse(Guid ConversationId, MessageDto Message, string[] FollowUpQuestions,
+    /// <summary>Tools the assistant used while answering, and any waiting for approval. The UI
+    /// shows these so a tool call is never invisible to the person it was made for.</summary>
+    ToolCallDto[] ToolCalls);
+public record ToolCallDto(string Tool, string Operation, string Status, string? Error,
+    Guid? InvocationId);
 public record FeedbackRequest(string Feedback, string? Comment);
 public record RenameRequest(string Title);
 
@@ -86,3 +93,26 @@ public record AuditLogDto(long Id, string? UserEmail, string Action, string? Ent
 public record ProviderStatusDto(string Llm, string Embeddings, string VectorStore, string Storage,
     string Database, bool LiveLlm, string? Notice);
 public record PagedResult<T>(T[] Items, int Total, int Page, int PageSize);
+
+// ---------- tools ----------
+public record ToolOperationDto(Guid Id, string Name, string Description, string? HttpMethod,
+    string? Path, string ParametersJson, bool IsReadOnly, bool IsActive);
+
+public record ToolDto(Guid Id, string Type, string Name, string Description, string? BaseUrl,
+    string? ConnectorApp, string AuthType, string? AuthHeaderName, bool HasSecret,
+    string HumanApproval, bool IsActive, string? LastError, DateTime? OperationsRefreshedAt,
+    DateTime CreatedAt, ToolOperationDto[] Operations);
+
+public record ToolSaveRequest(string Type, string Name, string Description, string? BaseUrl,
+    string? ConnectorApp, string? AuthType, string? AuthHeaderName, string? AuthSecret,
+    string? HumanApproval, bool IsActive = true);
+
+public record ToolOperationSaveRequest(string Name, string Description, string? HttpMethod,
+    string? Path, string? ParametersJson, bool IsReadOnly, bool IsActive = true);
+
+public record McpImportRequest(string Configuration, string? HumanApproval);
+public record McpImportResultDto(int Imported, int Skipped, string[] Names, string[] Warnings);
+
+public record ToolInvocationDto(Guid Id, Guid ToolId, string ToolName, string OperationName,
+    string ArgumentsJson, string Status, string? ResultJson, string? Error, int DurationMs,
+    Guid? ConversationId, string? UserEmail, DateTime CreatedAt);

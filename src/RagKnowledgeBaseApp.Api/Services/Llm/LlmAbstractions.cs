@@ -2,6 +2,14 @@ namespace RagKnowledgeBaseApp.Api.Services.Llm;
 
 public record ChatTurn(string Role, string Content);
 
+/// <summary>A function the model may call, described the way the provider expects: a name, a
+/// sentence explaining when to use it, and a JSON Schema for its arguments.</summary>
+public record ToolDefinition(string Name, string Description, string ParametersJson);
+
+/// <summary>A call the model asked for, and the result we fed back to it.</summary>
+public record ToolCall(string Id, string Name, string ArgumentsJson);
+public record ToolResult(string Id, string Name, string Content);
+
 public record ChatCompletionRequest(
     string Model,
     string SystemPrompt,
@@ -10,10 +18,17 @@ public record ChatCompletionRequest(
     double Temperature,
     int MaxTokens,
     // Formatted, numbered retrieval context. Empty when RAG is off or nothing matched.
-    string Context);
+    string Context,
+    // Functions the model may call. Empty when the chatbot has no tools attached.
+    IReadOnlyList<ToolDefinition>? Tools = null,
+    // Calls already made in this turn, with their results, so the model can be asked to continue.
+    IReadOnlyList<(ToolCall Call, ToolResult Result)>? CompletedCalls = null);
 
 public record ChatCompletionResult(string Content, int PromptTokens, int CompletionTokens,
-    string Model, bool NoAnswer);
+    string Model, bool NoAnswer,
+    /// <summary>Set when the model wants to call tools instead of answering. The caller runs them
+    /// and asks again with the results attached.</summary>
+    IReadOnlyList<ToolCall>? ToolCalls = null);
 
 public interface IEmbeddingProvider
 {

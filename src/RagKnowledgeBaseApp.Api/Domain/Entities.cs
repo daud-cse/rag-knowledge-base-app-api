@@ -165,6 +165,7 @@ public class Chatbot
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public List<ChatbotKnowledgeBase> KnowledgeBases { get; set; } = new();
+    public List<ChatbotTool> Tools { get; set; } = new();
 }
 
 /// <summary>Chatbot to knowledge-base mapping, with retrieval priority.</summary>
@@ -246,4 +247,115 @@ public class AuditLog
     public string? Details { get; set; }
     [MaxLength(64)] public string? IpAddress { get; set; }
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>An external capability a chatbot may call: a REST API, a remote MCP server, or a
+/// third-party application reached through a connector provider.
+///
+/// A tool belongs to a tenant and is opt-in per chatbot, so registering one does not by itself let
+/// any assistant call it.</summary>
+public class Tool
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+
+    public ToolType Type { get; set; } = ToolType.Api;
+    [MaxLength(120)] public string Name { get; set; } = "";
+
+    /// <summary>Shown to the model, not to the user. This is what the model reads when deciding
+    /// whether the tool is relevant, so it carries real weight.</summary>
+    [MaxLength(2000)] public string Description { get; set; } = "";
+
+    /// <summary>REST base for an Api tool; the server endpoint for an Mcp tool. Unused by
+    /// Connector tools, which are addressed by the provider.</summary>
+    [MaxLength(600)] public string? BaseUrl { get; set; }
+
+    /// <summary>Third-party application key for a Connector tool, e.g. GITHUB.</summary>
+    [MaxLength(80)] public string? ConnectorApp { get; set; }
+
+    public ToolAuthType AuthType { get; set; } = ToolAuthType.None;
+    [MaxLength(80)] public string? AuthHeaderName { get; set; }
+
+    /// <summary>Never returned by the API. Held here rather than in a vault because the platform
+    /// already stores its own credentials this way; a deployment handling third-party secrets at
+    /// scale should move this to Key Vault and keep only a reference.</summary>
+    [MaxLength(2000)] public string? AuthSecret { get; set; }
+
+    public HumanApprovalMode HumanApproval { get; set; } = HumanApprovalMode.Auto;
+    public bool IsActive { get; set; } = true;
+
+    /// <summary>Set when a discovery attempt against an MCP server failed, so the UI can explain
+    /// why a tool has no operations instead of showing an empty list.</summary>
+    [MaxLength(1000)] public string? LastError { get; set; }
+    public DateTime? OperationsRefreshedAt { get; set; }
+
+    public Guid CreatedByUserId { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    public List<ToolOperation> Operations { get; set; } = new();
+}
+
+/// <summary>One callable function on a tool. Declared by an administrator for an Api tool, and
+/// discovered from the server for an Mcp tool.</summary>
+public class ToolOperation
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ToolId { get; set; }
+    public Tool? Tool { get; set; }
+
+    /// <summary>The function name the model sees. Kept to the character set OpenAI accepts.</summary>
+    [MaxLength(80)] public string Name { get; set; } = "";
+    [MaxLength(1000)] public string Description { get; set; } = "";
+
+    /// <summary>Api tools only.</summary>
+    [MaxLength(10)] public string? HttpMethod { get; set; }
+    /// <summary>Path appended to the tool's base URL. Placeholders in {braces} are filled from the
+    /// arguments the model supplies.</summary>
+    [MaxLength(400)] public string? Path { get; set; }
+
+    /// <summary>JSON Schema for the arguments, passed to the model verbatim as the parameter
+    /// definition. For MCP this is the server's own inputSchema.</summary>
+    public string ParametersJson { get; set; } = """{"type":"object","properties":{}}""";
+
+    /// <summary>Drives Auto approval. Derived from the HTTP method for Api tools and from the
+    /// server's readOnlyHint annotation for MCP tools.</summary>
+    public bool IsReadOnly { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+/// <summary>Chatbot to tool mapping. Registering a tool does not expose it; this does.</summary>
+public class ChatbotTool
+{
+    public Guid ChatbotId { get; set; }
+    public Chatbot? Chatbot { get; set; }
+    public Guid ToolId { get; set; }
+    public Tool? Tool { get; set; }
+}
+
+/// <summary>Every attempt to call a tool, including the ones a person refused. This is the record
+/// that makes tool use auditable: what was asked, with which arguments, by whom, and what came
+/// back.</summary>
+public class ToolInvocation
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+    public Guid ToolId { get; set; }
+    public Tool? Tool { get; set; }
+    public Guid? ConversationId { get; set; }
+    public Guid UserId { get; set; }
+
+    [MaxLength(80)] public string OperationName { get; set; } = "";
+    public string ArgumentsJson { get; set; } = "{}";
+
+    public ToolInvocationStatus Status { get; set; } = ToolInvocationStatus.PendingApproval;
+
+    /// <summary>Truncated before storage: a tool may return a large body, and the audit value is in
+    /// what happened rather than in every byte.</summary>
+    [MaxLength(8000)] public string? ResultJson { get; set; }
+    [MaxLength(2000)] public string? Error { get; set; }
+
+    public Guid? DecidedByUserId { get; set; }
+    public DateTime? DecidedAt { get; set; }
+    public int DurationMs { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

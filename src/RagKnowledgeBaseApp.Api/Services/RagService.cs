@@ -7,6 +7,7 @@ using RagKnowledgeBaseApp.Api.Data;
 using RagKnowledgeBaseApp.Api.Domain;
 using RagKnowledgeBaseApp.Api.Dtos;
 using RagKnowledgeBaseApp.Api.Services.Llm;
+using RagKnowledgeBaseApp.Api.Services.Tools;
 using RagKnowledgeBaseApp.Api.Services.Vector;
 
 namespace RagKnowledgeBaseApp.Api.Services;
@@ -19,7 +20,14 @@ public record RagAnswer(
     int CompletionTokens,
     int LatencyMs,
     bool NoAnswer,
-    string[] FollowUpQuestions);
+    string[] FollowUpQuestions,
+    /// <summary>Tool calls the model made while answering, and any it could not make without a
+    /// person's approval. Empty for a chatbot with no tools attached.</summary>
+    List<ToolCallSummary> ToolCalls);
+
+/// <summary>What one tool call did, in the form the UI shows it.</summary>
+public record ToolCallSummary(string Tool, string Operation, string Status, string? Error,
+    Guid? InvocationId);
 
 /// <summary>Query rewriting -> hybrid search (security trimmed) -> rerank -> context build ->
 /// LLM -> citations, i.e. the pipeline in section 13 of the technical document.</summary>
@@ -32,15 +40,17 @@ public class RagService
     private readonly IVectorStore _vectors;
     private readonly IEmbeddingProvider _embeddings;
     private readonly IChatCompletionProvider _chat;
+    private readonly ToolService _tools;
     private readonly ILogger<RagService> _logger;
 
     public RagService(AppDbContext db, IVectorStore vectors, IEmbeddingProvider embeddings,
-        IChatCompletionProvider chat, ILogger<RagService> logger)
+        IChatCompletionProvider chat, ToolService tools, ILogger<RagService> logger)
     {
         _db = db;
         _vectors = vectors;
         _embeddings = embeddings;
         _chat = chat;
+        _tools = tools;
         _logger = logger;
     }
 
@@ -106,6 +116,9 @@ public class RagService
             }
         }
 
+        var attachedTools = await _tools.ForChatbotAsync(bot.Id, user.TenantId, ct);
+        var definitions = ToolService.Describe(attachedTools);
+
         var request = new ChatCompletionRequest(
             Model: bot.Model,
             SystemPrompt: ComposeSystemPrompt(bot),
@@ -114,16 +127,69 @@ public class RagService
             UserMessage: question,
             Temperature: bot.Temperature,
             MaxTokens: bot.MaxTokens,
-            Context: context);
+            Context: context,
+            Tools: definitions.Count > 0 ? definitions : null);
 
         var result = await _chat.CompleteAsync(request, ct);
+
+        // The model may ask for tools instead of answering. Run what it is allowed to run, feed the
+        // results back and ask again. Tokens accumulate across rounds so the usage figures and the
+        // quota reflect the whole exchange rather than only the final call.
+        var toolSummaries = new List<ToolCallSummary>();
+        var promptTokens = result.PromptTokens;
+        var completionTokens = result.CompletionTokens;
+        var completed = new List<(ToolCall, ToolResult)>();
+
+        for (var round = 0; round < ToolService.MaxRounds && result.ToolCalls is { Count: > 0 }; round++)
+        {
+            foreach (var call in result.ToolCalls)
+            {
+                var resolved = _tools.Resolve(attachedTools, call.Name);
+
+                if (resolved.Decision == ToolDecision.Unknown || resolved.Tool is null ||
+                    resolved.Operation is null)
+                {
+                    // Telling the model plainly beats silence: it can then answer without the tool
+                    // rather than waiting for a result that will never arrive.
+                    completed.Add((call, new ToolResult(call.Id, call.Name,
+                        "That tool is not available to this assistant.")));
+                    toolSummaries.Add(new ToolCallSummary(call.Name, "", "unavailable",
+                        "Not attached to this chatbot.", null));
+                    continue;
+                }
+
+                if (resolved.Decision == ToolDecision.NeedsApproval)
+                {
+                    var pending = await _tools.RequestApprovalAsync(resolved.Tool, resolved.Operation,
+                        call.ArgumentsJson, user.TenantId, user.Id, conversation.Id, ct);
+                    completed.Add((call, new ToolResult(call.Id, call.Name,
+                        "This action needs a person to approve it. It has been queued for approval; "
+                        + "tell the user it is waiting and do not claim it has been done.")));
+                    toolSummaries.Add(new ToolCallSummary(resolved.Tool.Name, resolved.Operation.Name,
+                        "awaiting approval", null, pending.Id));
+                    continue;
+                }
+
+                var execution = await _tools.ExecuteAsync(resolved.Tool, resolved.Operation,
+                    call.ArgumentsJson, user.TenantId, user.Id, conversation.Id, ct);
+                completed.Add((call, new ToolResult(call.Id, call.Name,
+                    execution.Success ? execution.Content : $"The tool failed: {execution.Error}")));
+                toolSummaries.Add(new ToolCallSummary(resolved.Tool.Name, resolved.Operation.Name,
+                    execution.Success ? "ran" : "failed", execution.Error, null));
+            }
+
+            result = await _chat.CompleteAsync(request with { CompletedCalls = completed }, ct);
+            promptTokens += result.PromptTokens;
+            completionTokens += result.CompletionTokens;
+        }
+
         sw.Stop();
 
         var used = bot.CitationsEnabled ? FilterToReferenced(result.Content, citations) : new List<CitationDto>();
         var followUps = SuggestFollowUps(hits, question);
 
-        return new RagAnswer(result.Content, used, result.Model, result.PromptTokens,
-            result.CompletionTokens, (int)sw.ElapsedMilliseconds, result.NoAnswer, followUps);
+        return new RagAnswer(result.Content, used, result.Model, promptTokens,
+            completionTokens, (int)sw.ElapsedMilliseconds, result.NoAnswer, followUps, toolSummaries);
     }
 
     /// <summary>Company knowledge bases mapped to the chatbot, plus the caller's own personal

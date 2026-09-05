@@ -244,7 +244,9 @@ public class ChatController : ControllerBase
             answer.NoAnswer
         }, ct);
 
-        return Ok(new ChatResponse(conversation.Id, MapMessage(assistantMessage), answer.FollowUpQuestions));
+        return Ok(new ChatResponse(conversation.Id, MapMessage(assistantMessage), answer.FollowUpQuestions,
+            answer.ToolCalls.Select(t => new ToolCallDto(t.Tool, t.Operation, t.Status, t.Error,
+                t.InvocationId)).ToArray()));
     }
 
     [HttpPost("conversations/{id:guid}/regenerate")]

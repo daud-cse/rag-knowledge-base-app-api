@@ -120,28 +120,87 @@ public class OpenAiChatCompletionProvider : OpenAiClientBase, IChatCompletionPro
             messages.Add(new { role = turn.Role, content = turn.Content });
         messages.Add(new { role = "user", content = request.UserMessage });
 
+        // Replay this turn's tool calls and their results. The assistant message carrying the
+        // calls has to be present before the tool results, or the provider rejects the thread.
+        if (request.CompletedCalls is { Count: > 0 })
+        {
+            messages.Add(new
+            {
+                role = "assistant",
+                content = (string?)null,
+                tool_calls = request.CompletedCalls.Select(c => new
+                {
+                    id = c.Call.Id,
+                    type = "function",
+                    function = new { name = c.Call.Name, arguments = c.Call.ArgumentsJson }
+                }).ToArray()
+            });
+            foreach (var (call, result) in request.CompletedCalls)
+                messages.Add(new { role = "tool", tool_call_id = call.Id, content = result.Content });
+        }
+
         try
         {
-            using var doc = await PostAsync(ChatUrl(model), new
-            {
-                model,
-                messages,
-                temperature = request.Temperature,
-                max_tokens = request.MaxTokens
-            }, ct);
+            object payload = request.Tools is { Count: > 0 }
+                ? new
+                {
+                    model,
+                    messages,
+                    temperature = request.Temperature,
+                    max_tokens = request.MaxTokens,
+                    tools = request.Tools.Select(t => new
+                    {
+                        type = "function",
+                        function = new
+                        {
+                            name = t.Name,
+                            description = t.Description,
+                            parameters = JsonSerializer.Deserialize<JsonElement>(t.ParametersJson)
+                        }
+                    }).ToArray()
+                }
+                : new
+                {
+                    model,
+                    messages,
+                    temperature = request.Temperature,
+                    max_tokens = request.MaxTokens
+                };
+
+            using var doc = await PostAsync(ChatUrl(model), payload, ct);
 
             var root = doc.RootElement;
-            var content = root.GetProperty("choices")[0].GetProperty("message")
-                .GetProperty("content").GetString() ?? "";
+            var message = root.GetProperty("choices")[0].GetProperty("message");
+            var content = message.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String
+                ? c.GetString() ?? "" : "";
+
+            // The model asked for tools rather than answering. Hand the calls back so the caller
+            // can apply its approval rules and run them.
+            List<ToolCall>? toolCalls = null;
+            if (message.TryGetProperty("tool_calls", out var tc) && tc.ValueKind == JsonValueKind.Array
+                && tc.GetArrayLength() > 0)
+            {
+                toolCalls = new List<ToolCall>();
+                foreach (var call in tc.EnumerateArray())
+                {
+                    var fn = call.GetProperty("function");
+                    toolCalls.Add(new ToolCall(
+                        call.GetProperty("id").GetString() ?? Guid.NewGuid().ToString("n"),
+                        fn.GetProperty("name").GetString() ?? "",
+                        fn.TryGetProperty("arguments", out var a) ? a.GetString() ?? "{}" : "{}"));
+                }
+            }
             var usage = root.TryGetProperty("usage", out var u) ? u : default;
             var promptTokens = usage.ValueKind == JsonValueKind.Object
                 ? usage.GetProperty("prompt_tokens").GetInt32() : 0;
             var completionTokens = usage.ValueKind == JsonValueKind.Object
                 ? usage.GetProperty("completion_tokens").GetInt32() : 0;
 
-            var noAnswer = content.Contains("I don't know", StringComparison.OrdinalIgnoreCase) ||
-                           content.Contains("no relevant information", StringComparison.OrdinalIgnoreCase);
-            return new ChatCompletionResult(content, promptTokens, completionTokens, model, noAnswer);
+            var noAnswer = toolCalls is null &&
+                           (content.Contains("I don't know", StringComparison.OrdinalIgnoreCase) ||
+                            content.Contains("no relevant information", StringComparison.OrdinalIgnoreCase));
+            return new ChatCompletionResult(content, promptTokens, completionTokens, model, noAnswer,
+                toolCalls);
         }
         catch (Exception ex)
         {
@@ -174,6 +233,16 @@ public class OpenAiChatCompletionProvider : OpenAiClientBase, IChatCompletionPro
             sb.AppendLine();
             sb.AppendLine("### Context");
             sb.AppendLine(request.Context);
+        }
+        else if (request.Tools is { Count: > 0 })
+        {
+            // With tools attached, an empty context is not a dead end: the answer may have to be
+            // fetched rather than retrieved. Telling the model to give up here would stop it
+            // calling the very tools it was given.
+            sb.AppendLine();
+            sb.AppendLine("No knowledge-base context was retrieved for this question. You have tools " +
+                          "available: use one if it can answer the question. If no tool fits and you " +
+                          "have no supporting documents, say so rather than answering from memory.");
         }
         else
         {

@@ -107,6 +107,35 @@ public class ChatbotsController : ControllerBase
         return Ok(Map(reloaded!));
     }
 
+    /// <summary>Attaches tools to a chatbot. Registering a tool does not expose it to any
+    /// assistant; this is the step that does.</summary>
+    [HttpPut("{id:guid}/tools")]
+    [Authorize(Policy = Policies.ChatbotAdmin)]
+    public async Task<ActionResult<ChatbotDto>> MapTools(Guid id, MapToolsRequest request,
+        CancellationToken ct)
+    {
+        var bot = await LoadAsync(id, ct);
+        if (bot is null) return NotFound();
+
+        var requested = request.ToolIds?.Distinct().ToList() ?? new();
+        var valid = await _db.Tools.AsNoTracking()
+            .Where(t => requested.Contains(t.Id) && t.TenantId == _current.TenantId)
+            .Select(t => t.Id).ToListAsync(ct);
+
+        if (requested.Except(valid).Any())
+            return BadRequest(new { message = "One or more tools do not belong to this company." });
+
+        await _db.ChatbotTools.Where(m => m.ChatbotId == id).ExecuteDeleteAsync(ct);
+        foreach (var toolId in valid)
+            _db.ChatbotTools.Add(new ChatbotTool { ChatbotId = id, ToolId = toolId });
+        await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync("chatbot.map-tools", "Chatbot", id.ToString(),
+            new { Count = valid.Count }, ct);
+
+        return Ok(Map((await LoadAsync(id, ct))!));
+    }
+
     [HttpDelete("{id:guid}")]
     [Authorize(Policy = Policies.ChatbotAdmin)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
@@ -121,6 +150,8 @@ public class ChatbotsController : ControllerBase
 
     private Task<Chatbot?> LoadAsync(Guid id, CancellationToken ct)
         => _db.Chatbots.Include(c => c.KnowledgeBases).ThenInclude(m => m.KnowledgeBase)
+            .Include(c => c.Tools).ThenInclude(m => m.Tool).ThenInclude(t => t!.Operations)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(c => c.Id == id && c.TenantId == _current.TenantId, ct);
 
     private static void Apply(Chatbot bot, SaveChatbotRequest r)
@@ -163,5 +194,8 @@ public class ChatbotsController : ControllerBase
         c.AllowUserUpload, c.ConversationTimeoutMinutes, c.KeepChatHistory, c.IsActive, c.CreatedAt,
         c.KnowledgeBases.OrderBy(m => m.Priority)
             .Select(m => new KnowledgeBaseLinkDto(m.KnowledgeBaseId, m.KnowledgeBase?.Name ?? "", m.Priority))
-            .ToArray());
+            .ToArray(),
+        c.Tools.Select(m => new ToolLinkDto(m.ToolId, m.Tool?.Name ?? "",
+            m.Tool?.Type.ToString() ?? "", m.Tool?.Operations.Count ?? 0))
+            .OrderBy(t => t.Name).ToArray());
 }
