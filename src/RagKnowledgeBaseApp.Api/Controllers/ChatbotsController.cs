@@ -30,6 +30,8 @@ public class ChatbotsController : ControllerBase
     {
         var query = _db.Chatbots.AsNoTracking()
             .Include(c => c.KnowledgeBases).ThenInclude(m => m.KnowledgeBase)
+            .Include(c => c.Tools).ThenInclude(m => m.Tool).ThenInclude(t => t!.Operations)
+            .AsSplitQuery()
             .Where(c => c.TenantId == _current.TenantId);
         if (onlyActive) query = query.Where(c => c.IsActive);
         var bots = await query.OrderBy(c => c.Name).ToListAsync(ct);
@@ -103,6 +105,9 @@ public class ChatbotsController : ControllerBase
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync("chatbot.map-kb", "Chatbot", id.ToString(), new { Count = valid.Count }, ct);
 
+        // Same reason as the tool mapping below: ExecuteDelete does not tell the change tracker,
+        // so clearing every knowledge base would otherwise appear to have done nothing.
+        _db.ChangeTracker.Clear();
         var reloaded = await LoadAsync(id, ct);
         return Ok(Map(reloaded!));
     }
@@ -133,6 +138,9 @@ public class ChatbotsController : ControllerBase
         await _audit.LogAsync("chatbot.map-tools", "Chatbot", id.ToString(),
             new { Count = valid.Count }, ct);
 
+        // ExecuteDelete runs straight against the database and leaves the change tracker holding
+        // the collection as it was, so a reload would hand back the mapping we just removed.
+        _db.ChangeTracker.Clear();
         return Ok(Map((await LoadAsync(id, ct))!));
     }
 
