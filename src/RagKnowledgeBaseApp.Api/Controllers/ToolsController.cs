@@ -48,6 +48,11 @@ public class ToolsController : ControllerBase
         return Ok(tools.Select(Map).ToArray());
     }
 
+    /// <summary>The third-party applications a connector may target. Served from the API so every
+    /// client sees the same list and the value can be validated on write.</summary>
+    [HttpGet("connector-apps")]
+    public ActionResult<ConnectorApp[]> ConnectorApps() => Ok(ConnectorCatalog.Apps.ToArray());
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ToolDto>> Get(Guid id, CancellationToken ct)
     {
@@ -75,9 +80,11 @@ public class ToolsController : ControllerBase
             if (!IsUsableUrl(request.BaseUrl))
                 return BadRequest(new { message = "A valid http or https URL is required." });
         }
-        else if (string.IsNullOrWhiteSpace(request.ConnectorApp))
+        else if (ConnectorCatalog.Find(request.ConnectorApp) is null)
         {
-            return BadRequest(new { message = "Pick an application for this connector." });
+            return BadRequest(new { message = string.IsNullOrWhiteSpace(request.ConnectorApp)
+                ? "Pick an application for this connector."
+                : $"'{request.ConnectorApp}' is not an application this platform knows about." });
         }
 
         var tool = new Tool
