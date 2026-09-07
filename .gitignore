@@ -1,3 +1,6 @@
+# Visual Studio local state. Its index files are held open by the IDE, which breaks git add.
+.vs/
+
 # Build output
 bin/
 obj/

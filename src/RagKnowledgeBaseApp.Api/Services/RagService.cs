@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using RagKnowledgeBaseApp.Api.Auth;
@@ -37,6 +38,26 @@ public class RagService
     /// <summary>Used when a chatbot has no usable budget configured.</summary>
     private const int DefaultContextTokens = 12000;
 
+    /// <summary>The function the model calls to search the knowledge base again.
+    ///
+    /// The first search always runs before the model is asked anything, so an answer is grounded
+    /// whether or not this is used. This exists for the case the first pass cannot serve: a
+    /// multi-part question where one half was missed, or a follow-up that needs different wording.
+    /// Making retrieval entirely the model's decision would trade that guarantee for flexibility,
+    /// which is the wrong way round for a knowledge base.</summary>
+    public const string SearchFunction = "search_knowledge_base";
+
+    private static ToolDefinition SearchDefinition => new(
+        SearchFunction,
+        "Search the knowledge base again with a different query. Use when the supplied context does "
+        + "not cover part of the question, or a follow-up needs material that was not retrieved. "
+        + "Returns numbered passages from documents you are cleared to read.",
+        """
+        {"type":"object","properties":{"query":{"type":"string",
+        "description":"What to search for, phrased as the words likely to appear in the document."}},
+        "required":["query"]}
+        """);
+
     private readonly AppDbContext _db;
     private readonly IVectorStore _vectors;
     private readonly IEmbeddingProvider _embeddings;
@@ -72,11 +93,14 @@ public class RagService
         var citations = new List<CitationDto>();
         var context = "";
         var hits = new List<(VectorHit hit, Document doc, KnowledgeBase kb)>();
+        var searchableKbIds = new List<Guid>();
+        var budget = bot.MaxContextTokens > 0 ? bot.MaxContextTokens : DefaultContextTokens;
 
         if (bot.RagEnabled)
         {
             var searchText = bot.QueryRewriting ? RewriteQuery(question, history) : question;
             var kbIds = await ResolveKnowledgeBaseIdsAsync(bot, conversation, user, ct);
+            searchableKbIds = kbIds;
 
             // A misconfigured or un-backfilled budget must never silently mean "send nothing".
             var contextBudget = bot.MaxContextTokens > 0 ? bot.MaxContextTokens : DefaultContextTokens;
@@ -100,20 +124,11 @@ public class RagService
                 }
                 else
                 {
-                    var wide = IsAggregationQuestion(question);
-                    var topK = wide ? Math.Min(bot.TopK * 3, 100) : bot.TopK;
-
-                    var queryVector = await _embeddings.EmbedAsync(searchText, "", ct);
-                    var raw = await _vectors.SearchAsync(filter, queryVector, searchText,
-                        Math.Max(topK, bot.RerankTopN), bot.SimilarityThreshold, bot.HybridSearch, ct);
-
-                    hits = await HydrateAsync(raw, ct);
-                    hits = Rerank(hits, searchText, attachmentDocumentIds, bot.RerankTopN,
-                        contextBudget);
-
                     // Passages read better, and are easier for the model to reason over, in the
-                    // order they appear in the source rather than by similarity score.
-                    hits = hits.OrderBy(h => h.doc.FileName).ThenBy(h => h.hit.Ordinal).ToList();
+                    // order they appear in the source rather than by similarity score, which is
+                    // what SearchAsync returns.
+                    hits = await SearchAsync(bot, kbIds, user, searchText, attachmentDocumentIds,
+                        contextBudget, ct);
                 }
 
                 (context, citations) = BuildContext(hits);
@@ -127,6 +142,7 @@ public class RagService
         // until the model has adopted that skill, so a skill also scopes its tools to its task.
         var definitions = ToolService.Describe(attachedTools);
         definitions.AddRange(SkillService.Describe(attachedSkills));
+        if (searchableKbIds.Count > 0) definitions.Add(SearchDefinition);
 
         var request = new ChatCompletionRequest(
             Model: bot.Model,
@@ -153,6 +169,38 @@ public class RagService
         {
             foreach (var call in result.ToolCalls)
             {
+                // A second search into the knowledge base. The filter is rebuilt from the caller's
+                // identity inside SearchAsync, so the only thing the model controls is the wording
+                // of the query -- it cannot reach a document the first search was not allowed to.
+                if (call.Name.Equals(SearchFunction, StringComparison.OrdinalIgnoreCase))
+                {
+                    var query = ReadQueryArgument(call.ArgumentsJson);
+                    if (string.IsNullOrWhiteSpace(query) || searchableKbIds.Count == 0)
+                    {
+                        completed.Add((call, new ToolResult(call.Id, call.Name,
+                            "No knowledge base is available to search.")));
+                        continue;
+                    }
+
+                    var extra = await SearchAsync(bot, searchableKbIds, user, query,
+                        attachmentDocumentIds, budget, ct);
+
+                    // Merged into the same pool the first pass produced, so citation numbering
+                    // stays continuous and an answer can cite either.
+                    var known = hits.Select(h => h.hit.ChunkId).ToHashSet();
+                    var fresh = extra.Where(h => !known.Contains(h.hit.ChunkId)).ToList();
+                    hits.AddRange(fresh);
+                    (context, citations) = BuildContext(hits);
+
+                    completed.Add((call, new ToolResult(call.Id, call.Name,
+                        fresh.Count == 0
+                            ? "That search returned nothing you have not already been given."
+                            : FormatPassages(fresh))));
+                    toolSummaries.Add(new ToolCallSummary("knowledge base", "search",
+                        fresh.Count == 0 ? "no new passages" : $"found {fresh.Count}", null, null));
+                    continue;
+                }
+
                 // A skill adoption is handled before tools: it is the model choosing how to work
                 // rather than asking for something to be done, so it needs no approval and has no
                 // side effect outside this answer.
@@ -228,6 +276,60 @@ public class RagService
 
         return new RagAnswer(result.Content, used, result.Model, promptTokens,
             completionTokens, (int)sw.ElapsedMilliseconds, result.NoAnswer, followUps, toolSummaries);
+    }
+
+    private static string? ReadQueryArgument(string argumentsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            return doc.RootElement.TryGetProperty("query", out var q) ? q.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Renders newly found passages for the model. Deliberately the same shape as the
+    /// numbered context it was already given, so a second batch reads as more of the same rather
+    /// than as a different kind of material.</summary>
+    private static string FormatPassages(
+        IReadOnlyList<(VectorHit hit, Document doc, KnowledgeBase kb)> passages)
+    {
+        var sb = new StringBuilder("Additional passages you are cleared to read:");
+        foreach (var (hit, doc, _) in passages)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"[{doc.FileName}{(hit.Locator is null ? "" : $" · {hit.Locator}")}]");
+            sb.AppendLine(hit.Text);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>One security-trimmed similarity search.
+    ///
+    /// Extracted so the follow-up search the model can request runs exactly the same query as the
+    /// automatic first pass. The filter is built here from the caller's identity and never from
+    /// anything the model supplies, which is what keeps a second search from widening what the
+    /// first one was allowed to see.</summary>
+    private async Task<List<(VectorHit hit, Document doc, KnowledgeBase kb)>> SearchAsync(
+        Chatbot bot, IReadOnlyCollection<Guid> kbIds, CurrentUser user, string query,
+        IReadOnlyCollection<Guid> attachmentDocumentIds, int contextBudget, CancellationToken ct)
+    {
+        var filter = new RetrievalFilter(user.TenantId, kbIds, user.Id, user.MaxClassification);
+        var topK = IsAggregationQuestion(query) ? Math.Min(bot.TopK * 3, 100) : bot.TopK;
+
+        var queryVector = await _embeddings.EmbedAsync(query, "", ct);
+        var raw = await _vectors.SearchAsync(filter, queryVector, query,
+            Math.Max(topK, bot.RerankTopN), bot.SimilarityThreshold, bot.HybridSearch, ct);
+
+        // HydrateAsync returns an unnamed tuple; Rerank names the elements, so the ordering below
+        // reads off the named form.
+        var hydrated = await HydrateAsync(raw, ct);
+        var ranked = Rerank(hydrated, query, attachmentDocumentIds, bot.RerankTopN, contextBudget);
+        return ranked.OrderBy(h => h.doc.FileName).ThenBy(h => h.hit.Ordinal).ToList();
     }
 
     /// <summary>Company knowledge bases mapped to the chatbot, plus the caller's own personal
