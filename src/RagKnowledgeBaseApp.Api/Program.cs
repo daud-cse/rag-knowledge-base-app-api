@@ -154,10 +154,23 @@ else
 
 if (llmOptions.HasCredentials)
 {
-    builder.Services.AddHttpClient<IEmbeddingProvider, OpenAiEmbeddingProvider>(
-        c => c.Timeout = TimeSpan.FromSeconds(60));
-    builder.Services.AddHttpClient<IChatCompletionProvider, OpenAiChatCompletionProvider>(
-        c => c.Timeout = TimeSpan.FromSeconds(120));
+    // Two engines speak to the same provider behind the same interfaces. Semantic Kernel is the
+    // default because it carries streaming, a wider set of providers and the wider .NET AI
+    // ecosystem; the hand-written client stays reachable with Llm:Engine=Http so the two can be
+    // compared and either rolled back to without a deployment.
+    if (llmOptions.Engine.Equals("Http", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddHttpClient<IEmbeddingProvider, OpenAiEmbeddingProvider>(
+            c => c.Timeout = TimeSpan.FromSeconds(60));
+        builder.Services.AddHttpClient<IChatCompletionProvider, OpenAiChatCompletionProvider>(
+            c => c.Timeout = TimeSpan.FromSeconds(120));
+    }
+    else
+    {
+        // Singletons: each builds a Kernel and its HTTP pipeline once, which is the expensive part.
+        builder.Services.AddSingleton<IEmbeddingProvider, SemanticKernelEmbeddingProvider>();
+        builder.Services.AddSingleton<IChatCompletionProvider, SemanticKernelChatProvider>();
+    }
 }
 else
 {

@@ -50,6 +50,10 @@ public class LlmOptions
 {
     /// <summary>OpenAI, AzureOpenAI or Local.</summary>
     public string Provider { get; set; } = "Local";
+
+    /// <summary>Which client talks to the provider: SemanticKernel or Http. Only meaningful when a
+    /// key is configured; the built-in local engine has no external client either way.</summary>
+    public string Engine { get; set; } = "SemanticKernel";
     public string ApiKey { get; set; } = "";
     public string Endpoint { get; set; } = "https://api.openai.com/v1";
     public string ChatModel { get; set; } = "gpt-4o-mini";
