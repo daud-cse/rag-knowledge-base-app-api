@@ -241,7 +241,14 @@ public class ChatController : ControllerBase
             answer.PromptTokens,
             answer.CompletionTokens,
             answer.LatencyMs,
-            answer.NoAnswer
+            answer.NoAnswer,
+            // Which skills the model adopted and which tools ran. Without this the log cannot
+            // answer "did my skill actually fire?", which is the first question anyone asks after
+            // attaching one.
+            Skills = answer.ToolCalls.Where(t => t.Operation == "skill")
+                .Select(t => t.Tool).ToArray(),
+            Tools = answer.ToolCalls.Where(t => t.Operation != "skill")
+                .Select(t => $"{t.Tool}.{t.Operation} ({t.Status})").ToArray()
         }, ct);
 
         return Ok(new ChatResponse(conversation.Id, MapMessage(assistantMessage), answer.FollowUpQuestions,

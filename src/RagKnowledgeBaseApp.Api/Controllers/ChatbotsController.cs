@@ -156,12 +156,19 @@ public class ChatbotsController : ControllerBase
         if (bot is null) return NotFound();
 
         var requested = request.SkillIds?.Distinct().ToList() ?? new();
-        var valid = await _db.Skills.AsNoTracking()
+        var candidates = await _db.Skills.AsNoTracking()
             .Where(s => requested.Contains(s.Id) && s.TenantId == _current.TenantId && s.IsInstalled)
-            .Select(s => s.Id).ToListAsync(ct);
+            .Select(s => new { s.Id, s.IsActive, s.Name })
+            .ToListAsync(ct);
 
-        if (requested.Except(valid).Any())
+        if (requested.Except(candidates.Select(c => c.Id)).Any())
             return BadRequest(new { message = "One or more skills are not installed in this company." });
+
+        // An inactive skill can be attached, but it is never offered to the model. Refusing the
+        // save outright would be worse -- someone may be deactivating one temporarily -- so the
+        // mapping succeeds and the reason it will not fire is named instead of being silent.
+        var inactive = candidates.Where(c => !c.IsActive).Select(c => c.Name).ToArray();
+        var valid = candidates.Select(c => c.Id).ToList();
 
         await _db.ChatbotSkills.Where(m => m.ChatbotId == id).ExecuteDeleteAsync(ct);
         foreach (var skillId in valid)
@@ -169,7 +176,7 @@ public class ChatbotsController : ControllerBase
         await _db.SaveChangesAsync(ct);
 
         await _audit.LogAsync("chatbot.map-skills", "Chatbot", id.ToString(),
-            new { Count = valid.Count }, ct);
+            new { Count = valid.Count, Inactive = inactive }, ct);
 
         // ExecuteDelete leaves the tracked collection stale, as with the other mappings.
         _db.ChangeTracker.Clear();
