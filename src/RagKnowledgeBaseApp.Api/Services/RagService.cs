@@ -130,7 +130,7 @@ public class RagService
 
         var request = new ChatCompletionRequest(
             Model: bot.Model,
-            SystemPrompt: ComposeSystemPrompt(bot),
+            SystemPrompt: ComposeSystemPrompt(bot) + DescribeCapabilities(attachedSkills, attachedTools),
             History: history.Select(m => new ChatTurn(
                 m.Role == MessageRole.User ? "user" : "assistant", m.Content)).ToList(),
             UserMessage: question,
@@ -399,6 +399,33 @@ public class RagService
     {
         var clean = Regex.Replace(text, @"\s+", " ").Trim();
         return clean.Length <= 320 ? clean : clean[..320] + "...";
+    }
+
+    /// <summary>Tells the assistant what it has been given.
+    ///
+    /// Without this it answers questions about its own configuration from imagination: asked
+    /// whether a skill was attached, it will confidently say no while holding that very skill.
+    /// The function definitions alone are not enough, because a model reads those as things it may
+    /// call rather than as facts about itself.</summary>
+    private static string DescribeCapabilities(IReadOnlyCollection<Domain.Skill> skills,
+        IReadOnlyCollection<Domain.Tool> tools)
+    {
+        if (skills.Count == 0 && tools.Count == 0) return "";
+
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine();
+        sb.AppendLine("### What you have been given");
+
+        if (skills.Count > 0)
+            sb.AppendLine("Skills attached to you: " + string.Join(", ", skills.Select(s => s.Name))
+                          + ". Adopt one by calling its function when the request calls for it.");
+        if (tools.Count > 0)
+            sb.AppendLine("Tools attached to you: " + string.Join(", ", tools.Select(t => t.Name)) + ".");
+
+        sb.AppendLine("If asked what skills or tools you have, answer from this list. Never claim to "
+                      + "have none while this list is present, and never invent entries that are not on it.");
+        return sb.ToString();
     }
 
     private static string ComposeSystemPrompt(Chatbot bot)
