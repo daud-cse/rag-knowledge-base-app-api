@@ -166,6 +166,7 @@ public class Chatbot
 
     public List<ChatbotKnowledgeBase> KnowledgeBases { get; set; } = new();
     public List<ChatbotTool> Tools { get; set; } = new();
+    public List<ChatbotSkill> Skills { get; set; } = new();
 }
 
 /// <summary>Chatbot to knowledge-base mapping, with retrieval priority.</summary>
@@ -358,4 +359,66 @@ public class ToolInvocation
     public DateTime? DecidedAt { get; set; }
     public int DurationMs { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>A reusable set of instructions an assistant can adopt for a particular kind of task.
+///
+/// Where a chatbot's system prompt describes how it always behaves, a skill describes how to carry
+/// out one job well: how to write a weekly status report, how to triage an issue, how to answer
+/// from a particular corpus. The model chooses whether a skill applies by reading its description,
+/// so the description is functional text rather than documentation.
+///
+/// Instructions are markdown and correspond to the SKILL.md file of the portable skill format, so
+/// a skill written here can be exported, and one written elsewhere imported.</summary>
+public class Skill
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+
+    /// <summary>A handle rather than a title: weekly-status-report, faq-lookup, escalation.</summary>
+    [MaxLength(64)] public string Name { get; set; } = "";
+
+    /// <summary>What the skill is for. The model reads this to decide whether to use it, so a vague
+    /// description makes a skill that never fires or fires on everything.</summary>
+    [MaxLength(1024)] public string Description { get; set; } = "";
+
+    /// <summary>Comma separated, for filtering the catalogue. Not seen by the model.</summary>
+    [MaxLength(400)] public string? Tags { get; set; }
+
+    /// <summary>Markdown, supplied to the model when it adopts the skill. This is the SKILL.md
+    /// body; the limit matches the portable format's practical ceiling.</summary>
+    [MaxLength(50000)] public string Instructions { get; set; } = "";
+
+    [MaxLength(20)] public string Version { get; set; } = "1.0.0";
+
+    /// <summary>A skill can exist in the catalogue without being available to assistants. Installing
+    /// is what makes it selectable when configuring a chatbot.</summary>
+    public bool IsInstalled { get; set; } = true;
+    public bool IsActive { get; set; } = true;
+
+    public Guid CreatedByUserId { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Tools the skill brings with it. They become callable only once the model has
+    /// adopted the skill, so a skill is also a way to scope a tool to a task.</summary>
+    public List<SkillTool> Tools { get; set; } = new();
+}
+
+/// <summary>Skill to tool mapping.</summary>
+public class SkillTool
+{
+    public Guid SkillId { get; set; }
+    public Skill? Skill { get; set; }
+    public Guid ToolId { get; set; }
+    public Tool? Tool { get; set; }
+}
+
+/// <summary>Chatbot to skill mapping. A skill does nothing until an assistant is given it.</summary>
+public class ChatbotSkill
+{
+    public Guid ChatbotId { get; set; }
+    public Chatbot? Chatbot { get; set; }
+    public Guid SkillId { get; set; }
+    public Skill? Skill { get; set; }
 }

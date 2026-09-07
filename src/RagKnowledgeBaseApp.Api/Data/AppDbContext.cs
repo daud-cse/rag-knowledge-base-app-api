@@ -22,6 +22,9 @@ public class AppDbContext : DbContext
     public DbSet<ToolOperation> ToolOperations => Set<ToolOperation>();
     public DbSet<ChatbotTool> ChatbotTools => Set<ChatbotTool>();
     public DbSet<ToolInvocation> ToolInvocations => Set<ToolInvocation>();
+    public DbSet<Skill> Skills => Set<Skill>();
+    public DbSet<ChatbotSkill> ChatbotSkills => Set<ChatbotSkill>();
+    public DbSet<SkillTool> SkillTools => Set<SkillTool>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -85,6 +88,32 @@ public class AppDbContext : DbContext
         });
 
         b.Entity<AuditLog>().HasIndex(x => new { x.TenantId, x.Timestamp });
+
+        b.Entity<Skill>(e =>
+        {
+            // The model is given skills by name, so two with the same name inside one tenant would
+            // be ambiguous to it as well as to a person.
+            e.HasIndex(x => new { x.TenantId, x.Name }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.IsInstalled });
+            e.HasMany(x => x.Tools).WithOne(t => t.Skill!)
+                .HasForeignKey(t => t.SkillId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<SkillTool>(e =>
+        {
+            e.HasKey(x => new { x.SkillId, x.ToolId });
+            e.HasOne(x => x.Tool).WithMany()
+                .HasForeignKey(x => x.ToolId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<ChatbotSkill>(e =>
+        {
+            e.HasKey(x => new { x.ChatbotId, x.SkillId });
+            e.HasOne(x => x.Chatbot).WithMany(c => c!.Skills)
+                .HasForeignKey(x => x.ChatbotId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Skill).WithMany()
+                .HasForeignKey(x => x.SkillId).OnDelete(DeleteBehavior.Cascade);
+        });
 
         b.Entity<Tool>(e =>
         {

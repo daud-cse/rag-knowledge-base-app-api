@@ -8,6 +8,7 @@ using RagKnowledgeBaseApp.Api.Domain;
 using RagKnowledgeBaseApp.Api.Dtos;
 using RagKnowledgeBaseApp.Api.Services.Llm;
 using RagKnowledgeBaseApp.Api.Services.Tools;
+using RagKnowledgeBaseApp.Api.Services.Skills;
 using RagKnowledgeBaseApp.Api.Services.Vector;
 
 namespace RagKnowledgeBaseApp.Api.Services;
@@ -41,11 +42,14 @@ public class RagService
     private readonly IEmbeddingProvider _embeddings;
     private readonly IChatCompletionProvider _chat;
     private readonly ToolService _tools;
+    private readonly SkillService _skills;
     private readonly ILogger<RagService> _logger;
 
     public RagService(AppDbContext db, IVectorStore vectors, IEmbeddingProvider embeddings,
-        IChatCompletionProvider chat, ToolService tools, ILogger<RagService> logger)
+        IChatCompletionProvider chat, ToolService tools, SkillService skills,
+        ILogger<RagService> logger)
     {
+        _skills = skills;
         _db = db;
         _vectors = vectors;
         _embeddings = embeddings;
@@ -117,7 +121,12 @@ public class RagService
         }
 
         var attachedTools = await _tools.ForChatbotAsync(bot.Id, user.TenantId, ct);
+        var attachedSkills = await _skills.ForChatbotAsync(bot.Id, user.TenantId, ct);
+
+        // Skills a chatbot has are offered as functions; the tools a skill carries are not offered
+        // until the model has adopted that skill, so a skill also scopes its tools to its task.
         var definitions = ToolService.Describe(attachedTools);
+        definitions.AddRange(SkillService.Describe(attachedSkills));
 
         var request = new ChatCompletionRequest(
             Model: bot.Model,
@@ -144,6 +153,29 @@ public class RagService
         {
             foreach (var call in result.ToolCalls)
             {
+                // A skill adoption is handled before tools: it is the model choosing how to work
+                // rather than asking for something to be done, so it needs no approval and has no
+                // side effect outside this answer.
+                if (call.Name.StartsWith(SkillService.FunctionPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    var skill = SkillService.Resolve(attachedSkills, call.Name);
+                    if (skill is null)
+                    {
+                        completed.Add((call, new ToolResult(call.Id, call.Name,
+                            "That skill is not available to this assistant.")));
+                        continue;
+                    }
+
+                    completed.Add((call, new ToolResult(call.Id, call.Name, SkillService.Activate(skill))));
+                    toolSummaries.Add(new ToolCallSummary(skill.Name, "skill", "adopted", null, null));
+
+                    // The skill's own tools join the callable set for the remaining rounds.
+                    foreach (var link in skill.Tools)
+                        if (link.Tool is { IsActive: true } && attachedTools.All(t => t.Id != link.Tool.Id))
+                            attachedTools.Add(link.Tool);
+                    continue;
+                }
+
                 var resolved = _tools.Resolve(attachedTools, call.Name);
 
                 if (resolved.Decision == ToolDecision.Unknown || resolved.Tool is null ||
@@ -178,7 +210,13 @@ public class RagService
                     execution.Success ? "ran" : "failed", execution.Error, null));
             }
 
-            result = await _chat.CompleteAsync(request with { CompletedCalls = completed }, ct);
+            // Rebuilt rather than reused: a skill adopted in this round may have brought tools the
+            // model has not been told about yet.
+            var roundDefinitions = ToolService.Describe(attachedTools);
+            roundDefinitions.AddRange(SkillService.Describe(attachedSkills));
+
+            result = await _chat.CompleteAsync(
+                request with { CompletedCalls = completed, Tools = roundDefinitions }, ct);
             promptTokens += result.PromptTokens;
             completionTokens += result.CompletionTokens;
         }

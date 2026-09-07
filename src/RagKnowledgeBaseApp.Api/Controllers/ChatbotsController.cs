@@ -31,6 +31,7 @@ public class ChatbotsController : ControllerBase
         var query = _db.Chatbots.AsNoTracking()
             .Include(c => c.KnowledgeBases).ThenInclude(m => m.KnowledgeBase)
             .Include(c => c.Tools).ThenInclude(m => m.Tool).ThenInclude(t => t!.Operations)
+            .Include(c => c.Skills).ThenInclude(m => m.Skill)
             .AsSplitQuery()
             .Where(c => c.TenantId == _current.TenantId);
         if (onlyActive) query = query.Where(c => c.IsActive);
@@ -144,6 +145,37 @@ public class ChatbotsController : ControllerBase
         return Ok(Map((await LoadAsync(id, ct))!));
     }
 
+    /// <summary>Attaches skills to a chatbot. Only installed skills can be attached, so the
+    /// catalogue and what an assistant can actually reach stay separate.</summary>
+    [HttpPut("{id:guid}/skills")]
+    [Authorize(Policy = Policies.ChatbotAdmin)]
+    public async Task<ActionResult<ChatbotDto>> MapSkills(Guid id, MapSkillsRequest request,
+        CancellationToken ct)
+    {
+        var bot = await LoadAsync(id, ct);
+        if (bot is null) return NotFound();
+
+        var requested = request.SkillIds?.Distinct().ToList() ?? new();
+        var valid = await _db.Skills.AsNoTracking()
+            .Where(s => requested.Contains(s.Id) && s.TenantId == _current.TenantId && s.IsInstalled)
+            .Select(s => s.Id).ToListAsync(ct);
+
+        if (requested.Except(valid).Any())
+            return BadRequest(new { message = "One or more skills are not installed in this company." });
+
+        await _db.ChatbotSkills.Where(m => m.ChatbotId == id).ExecuteDeleteAsync(ct);
+        foreach (var skillId in valid)
+            _db.ChatbotSkills.Add(new ChatbotSkill { ChatbotId = id, SkillId = skillId });
+        await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync("chatbot.map-skills", "Chatbot", id.ToString(),
+            new { Count = valid.Count }, ct);
+
+        // ExecuteDelete leaves the tracked collection stale, as with the other mappings.
+        _db.ChangeTracker.Clear();
+        return Ok(Map((await LoadAsync(id, ct))!));
+    }
+
     [HttpDelete("{id:guid}")]
     [Authorize(Policy = Policies.ChatbotAdmin)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
@@ -159,6 +191,7 @@ public class ChatbotsController : ControllerBase
     private Task<Chatbot?> LoadAsync(Guid id, CancellationToken ct)
         => _db.Chatbots.Include(c => c.KnowledgeBases).ThenInclude(m => m.KnowledgeBase)
             .Include(c => c.Tools).ThenInclude(m => m.Tool).ThenInclude(t => t!.Operations)
+            .Include(c => c.Skills).ThenInclude(m => m.Skill)
             .AsSplitQuery()
             .FirstOrDefaultAsync(c => c.Id == id && c.TenantId == _current.TenantId, ct);
 
@@ -205,5 +238,7 @@ public class ChatbotsController : ControllerBase
             .ToArray(),
         c.Tools.Select(m => new ToolLinkDto(m.ToolId, m.Tool?.Name ?? "",
             m.Tool?.Type.ToString() ?? "", m.Tool?.Operations.Count ?? 0))
-            .OrderBy(t => t.Name).ToArray());
+            .OrderBy(t => t.Name).ToArray(),
+        c.Skills.Select(m => new SkillLinkDto(m.SkillId, m.Skill?.Name ?? "",
+            m.Skill?.Description ?? "")).OrderBy(t => t.Name).ToArray());
 }

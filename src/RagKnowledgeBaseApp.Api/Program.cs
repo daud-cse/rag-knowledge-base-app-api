@@ -12,6 +12,7 @@ using RagKnowledgeBaseApp.Api.Services.Ingestion;
 using RagKnowledgeBaseApp.Api.Services.Llm;
 using RagKnowledgeBaseApp.Api.Services.Quota;
 using RagKnowledgeBaseApp.Api.Services.Tools;
+using RagKnowledgeBaseApp.Api.Services.Skills;
 using RagKnowledgeBaseApp.Api.Services.Storage;
 using RagKnowledgeBaseApp.Api.Services.Vector;
 
@@ -58,6 +59,7 @@ builder.Services.AddHttpClient<IToolExecutor, ApiToolExecutor>(c => c.Timeout = 
 builder.Services.AddHttpClient<McpToolExecutor>(c => c.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddScoped<IToolExecutor>(sp => sp.GetRequiredService<McpToolExecutor>());
 builder.Services.AddScoped<ToolService>();
+builder.Services.AddScoped<SkillService>();
 builder.Services.AddSingleton<IExternalTokenValidator, ExternalTokenValidator>();
 
 // ---------------- database ----------------

@@ -47,9 +47,10 @@ public record ChatbotDto(Guid Id, string Name, string? Description, string Syste
     int MaxContextTokens, double SimilarityThreshold, bool HybridSearch, bool QueryRewriting, string ResponseLanguage,
     string WelcomeMessage, string[] SuggestedQuestions, bool AllowUserUpload,
     int ConversationTimeoutMinutes, bool KeepChatHistory, bool IsActive, DateTime CreatedAt,
-    KnowledgeBaseLinkDto[] KnowledgeBases, ToolLinkDto[] Tools);
+    KnowledgeBaseLinkDto[] KnowledgeBases, ToolLinkDto[] Tools, SkillLinkDto[] Skills);
 public record KnowledgeBaseLinkDto(Guid KnowledgeBaseId, string Name, int Priority);
 public record ToolLinkDto(Guid ToolId, string Name, string Type, int OperationCount);
+public record SkillLinkDto(Guid SkillId, string Name, string Description);
 public record MapToolsRequest(Guid[] ToolIds);
 public record SaveChatbotRequest(string Name, string? Description, string? SystemPrompt, string? Model,
     double? Temperature, int? MaxTokens, bool? RagEnabled, bool? CitationsEnabled, int? TopK,
@@ -116,3 +117,14 @@ public record McpImportResultDto(int Imported, int Skipped, string[] Names, stri
 public record ToolInvocationDto(Guid Id, Guid ToolId, string ToolName, string OperationName,
     string ArgumentsJson, string Status, string? ResultJson, string? Error, int DurationMs,
     Guid? ConversationId, string? UserEmail, DateTime CreatedAt);
+
+// ---------- skills ----------
+public record SkillDto(Guid Id, string Name, string Description, string? Tags, string Instructions,
+    string Version, bool IsInstalled, bool IsActive, DateTime CreatedAt, DateTime UpdatedAt,
+    ToolLinkDto[] Tools);
+
+public record SkillSaveRequest(string Name, string Description, string? Tags, string? Instructions,
+    string? Version, Guid[]? ToolIds, bool IsInstalled = true, bool IsActive = true);
+
+public record SkillImportResultDto(int Imported, int Skipped, string[] Names, string[] Warnings);
+public record MapSkillsRequest(Guid[] SkillIds);
