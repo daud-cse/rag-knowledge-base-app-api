@@ -66,7 +66,7 @@ public record ConversationDto(Guid Id, Guid ChatbotId, string ChatbotName, strin
     DateTime CreatedAt, DateTime UpdatedAt, int MessageCount);
 public record MessageDto(Guid Id, string Role, string Content, CitationDto[] Citations, string? Model,
     int PromptTokens, int CompletionTokens, int LatencyMs, bool NoAnswer, string Feedback,
-    DateTime CreatedAt);
+    DateTime CreatedAt, ToolCallDto[] ToolCalls);
 public record StartConversationRequest(Guid ChatbotId, string? Title);
 public record SendMessageRequest(string Message, Guid[]? AttachmentDocumentIds);
 public record ChatResponse(Guid ConversationId, MessageDto Message, string[] FollowUpQuestions,

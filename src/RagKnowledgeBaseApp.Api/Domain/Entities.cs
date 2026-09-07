@@ -204,6 +204,11 @@ public class Message
     public string Content { get; set; } = "";
     /// <summary>Serialised citation list, see CitationDto.</summary>
     public string? CitationsJson { get; set; }
+
+    /// <summary>Serialised list of the skills adopted and tools run while composing this answer.
+    /// Stored on the message rather than derived, so the record survives a reload and a person can
+    /// see afterwards why an answer came out the way it did.</summary>
+    public string? ToolCallsJson { get; set; }
     [MaxLength(100)] public string? Model { get; set; }
     public int PromptTokens { get; set; }
     public int CompletionTokens { get; set; }

@@ -211,7 +211,11 @@ public class ChatController : ControllerBase
             PromptTokens = answer.PromptTokens,
             CompletionTokens = answer.CompletionTokens,
             LatencyMs = answer.LatencyMs,
-            NoAnswer = answer.NoAnswer
+            NoAnswer = answer.NoAnswer,
+            ToolCallsJson = answer.ToolCalls.Count == 0
+                ? null
+                : JsonSerializer.Serialize(answer.ToolCalls.Select(t =>
+                    new ToolCallDto(t.Tool, t.Operation, t.Status, t.Error, t.InvocationId)))
         };
         _db.Messages.Add(assistantMessage);
 
@@ -394,5 +398,10 @@ public class ChatController : ControllerBase
 
     private static MessageDto MapMessage(Message m) => new(m.Id, m.Role.ToString(), m.Content,
         Deserialize(m.CitationsJson), m.Model, m.PromptTokens, m.CompletionTokens, m.LatencyMs,
-        m.NoAnswer, m.Feedback.ToString(), m.CreatedAt);
+        m.NoAnswer, m.Feedback.ToString(), m.CreatedAt, DeserializeCalls(m.ToolCallsJson));
+
+    private static ToolCallDto[] DeserializeCalls(string? json) =>
+        string.IsNullOrWhiteSpace(json)
+            ? Array.Empty<ToolCallDto>()
+            : JsonSerializer.Deserialize<ToolCallDto[]>(json) ?? Array.Empty<ToolCallDto>();
 }
