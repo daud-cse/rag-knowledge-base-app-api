@@ -1,0 +1,30 @@
+name: pr-check-api
+
+# Builds every pull request into dev or main, so a change that does not compile
+# can never be merged. Deployment stays in deploy.yml and runs on main only.
+on:
+  pull_request:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore src/RagKnowledgeBaseApp.Api/RagKnowledgeBaseApp.Api.csproj
+
+      - name: Build
+        run: dotnet build src/RagKnowledgeBaseApp.Api/RagKnowledgeBaseApp.Api.csproj -c Release --no-restore
+
+      - name: Build container image (not pushed)
+        # Catches Dockerfile breakage before it reaches main, where it would stop a deploy.
+        run: docker build -t rag-knowledge-base-app-api:pr .
